@@ -13,20 +13,22 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+//用YYKVStorageItem保存缓存相关参数
 /**
  YYKVStorageItem is used by `YYKVStorage` to store key-value pair and meta data.
  Typically, you should not use this class directly.
  */
 @interface YYKVStorageItem : NSObject
-@property (nonatomic, strong) NSString *key;                ///< key
-@property (nonatomic, strong) NSData *value;                ///< value
-@property (nullable, nonatomic, strong) NSString *filename; ///< filename (nil if inline)
-@property (nonatomic) int size;                             ///< value's size in bytes
-@property (nonatomic) int modTime;                          ///< modification unix timestamp
-@property (nonatomic) int accessTime;                       ///< last access unix timestamp
-@property (nullable, nonatomic, strong) NSData *extendedData; ///< extended data (nil if no extended data)
+@property (nonatomic, strong) NSString *key;                ///< key 缓存键
+@property (nonatomic, strong) NSData *value;                ///< value 缓存对象
+@property (nullable, nonatomic, strong) NSString *filename; ///< filename (nil if inline) 缓存文件名
+@property (nonatomic) int size;                             ///< value's size in bytes 缓存大小
+@property (nonatomic) int modTime;                          ///< modification unix timestamp 缓存时间
+@property (nonatomic) int accessTime;                       ///< last access unix timestamp 最后使用时间
+@property (nullable, nonatomic, strong) NSData *extendedData; ///< extended data (nil if no extended data) 扩展数据
 @end
 
+//指定缓存类型
 /**
  Storage type, indicated where the `YYKVStorageItem.value` stored.
  
@@ -45,12 +47,15 @@ NS_ASSUME_NONNULL_BEGIN
  */
 typedef NS_ENUM(NSUInteger, YYKVStorageType) {
     
+    //文件缓存
     /// The `value` is stored as a file in file system.
     YYKVStorageTypeFile = 0,
     
+    //数据库缓存
     /// The `value` is stored in sqlite with blob type.
     YYKVStorageTypeSQLite = 1,
     
+    // 如果filename != null，则value用文件缓存，缓存的其他参数用数据库缓存；如果filename == null,则用数据库缓存
     /// The `value` is stored in file system or sqlite based on your choice.
     YYKVStorageTypeMixed = 2,
 };
@@ -80,16 +85,18 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
 /// @name Attribute
 ///=============================================================================
 
-@property (nonatomic, readonly) NSString *path;        ///< The path of this storage.
-@property (nonatomic, readonly) YYKVStorageType type;  ///< The type of this storage.
-@property (nonatomic) BOOL errorLogsEnabled;           ///< Set `YES` to enable error logs for debug.
+@property (nonatomic, readonly) NSString *path;        ///< The path of this storage.缓存路径
+@property (nonatomic, readonly) YYKVStorageType type;  ///< The type of this storage.缓存方式
+@property (nonatomic) BOOL errorLogsEnabled;           ///< Set `YES` to enable error logs for debug.是否打开错误日志
 
 #pragma mark - Initializer
 ///=============================================================================
 /// @name Initializer
+// 这两个方法不能使用，因为实例化对象时要有初始化path、type
 ///=============================================================================
 - (instancetype)init UNAVAILABLE_ATTRIBUTE;
 + (instancetype)new UNAVAILABLE_ATTRIBUTE;
+
 
 /**
  The designated initializer. 
@@ -102,14 +109,21 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  @return  A new storage object, or nil if an error occurs.
  @warning Multiple instances with the same path will make the storage unstable.
  */
+
+/**
+ 实例化对象
+
+ @param path 缓存路径
+ @param type 缓存方式
+ */
 - (nullable instancetype)initWithPath:(NSString *)path type:(YYKVStorageType)type NS_DESIGNATED_INITIALIZER;
 
 
-#pragma mark - Save Items
+#pragma mark - Save Items 添加缓存
 ///=============================================================================
 /// @name Save Items
 ///=============================================================================
-
+// @{
 /**
  Save an item or update the item with 'key' if it already exists.
  
@@ -125,6 +139,12 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  @param item  An item.
  @return Whether succeed.
  */
+
+/**
+ 添加缓存
+
+ @param item 将缓存数据封装到YYKVStorageItem对象
+ */
 - (BOOL)saveItem:(YYKVStorageItem *)item;
 
 /**
@@ -136,6 +156,13 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  @param key   The key, should not be empty (nil or zero length).
  @param value The key, should not be empty (nil or zero length).
  @return Whether succeed.
+ */
+
+/**
+ 添加缓存
+
+ @param key 缓存键值
+ @param value 缓存对象
  */
 - (BOOL)saveItemWithKey:(NSString *)key value:(NSData *)value;
 
@@ -155,16 +182,30 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  
  @return Whether succeed.
  */
+
+/**
+ 添加缓存
+
+ @param key 缓存键值
+ @param value 缓存对象
+ @param filename 缓存文件名
+ *  filename != null
+ *  则用文件缓存value，并把`key`,`filename`,`extendedData`写入数据库
+ *  filename     == null
+ *  缓存方式type：YYKVStorageTypeFile 不进行缓存
+ *  缓存方式type：YYKVStorageTypeSQLite || YYKVStorageTypeMixed 数据库缓存
+ @param extendedData 缓存拓展数据
+ */
 - (BOOL)saveItemWithKey:(NSString *)key
                   value:(NSData *)value
                filename:(nullable NSString *)filename
            extendedData:(nullable NSData *)extendedData;
-
-#pragma mark - Remove Items
+// @}
+#pragma mark - Remove Items 删除缓存
 ///=============================================================================
 /// @name Remove Items
 ///=============================================================================
-
+// @{
 /**
  Remove an item with 'key'.
  
@@ -182,6 +223,7 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  */
 - (BOOL)removeItemForKeys:(NSArray<NSString *> *)keys;
 
+#pragma mark - 删除所有内存开销大于指定大小的缓存
 /**
  Remove all items which `value` is larger than a specified size.
  
@@ -190,6 +232,7 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  */
 - (BOOL)removeItemsLargerThanSize:(int)size;
 
+#pragma  mark - 删除所有上次访问时间比指定时间更早的缓存。
 /**
  Remove all items which last access time is earlier than a specified timestamp.
  
@@ -198,6 +241,7 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  */
 - (BOOL)removeItemsEarlierThanTime:(int)time;
 
+#pragma mark - 减小缓存占的容量开销，使总缓存的容量开销值不大于maxSize(删除原则：LRU 最久未使用的缓存将先删除)
 /**
  Remove items to make the total size not larger than a specified size.
  The least recently used (LRU) items will be removed first.
@@ -207,6 +251,7 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  */
 - (BOOL)removeItemsToFitSize:(int)maxSize;
 
+#pragma mark - 减小总缓存数量，使总缓存数量不大于maxCount(删除原则：LRU 最久未使用的缓存将先删除)
 /**
  Remove items to make the total count not larger than a specified count.
  The least recently used (LRU) items will be removed first.
@@ -216,6 +261,7 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  */
 - (BOOL)removeItemsToFitCount:(int)maxCount;
 
+#pragma mark - 清空所有缓存
 /**
  Remove all items in background queue.
  
@@ -236,13 +282,13 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  */
 - (void)removeAllItemsWithProgressBlock:(nullable void(^)(int removedCount, int totalCount))progress
                                endBlock:(nullable void(^)(BOOL error))end;
+// @}
 
-
-#pragma mark - Get Items
+#pragma mark - Get Items 获取缓存
 ///=============================================================================
 /// @name Get Items
 ///=============================================================================
-
+// @{
 /**
  Get item with a specified key.
  
@@ -293,12 +339,14 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
     exists / error occurs.
  */
 - (nullable NSDictionary<NSString *, NSData *> *)getItemValueForKeys:(NSArray<NSString *> *)keys;
+// @}
 
 #pragma mark - Get Storage Status
 ///=============================================================================
 /// @name Get Storage Status
 ///=============================================================================
 
+#pragma mark - 判断当前key是否有对应的缓存
 /**
  Whether an item exists for a specified key.
  
@@ -308,12 +356,14 @@ typedef NS_ENUM(NSUInteger, YYKVStorageType) {
  */
 - (BOOL)itemExistsForKey:(NSString *)key;
 
+#pragma mark - 获取缓存总量
 /**
  Get total item count.
  @return Total item count, -1 when an error occurs.
  */
 - (int)getItemsCount;
 
+#pragma mark - 获取缓存总内存开销
 /**
  Get item value's total size in bytes.
  @return Total size in bytes, -1 when an error occurs.

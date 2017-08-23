@@ -39,15 +39,22 @@ NS_ASSUME_NONNULL_BEGIN
  */
 @interface YYCache : NSObject
 
+#pragma mark - 只读属性
+// @{
+// 读取当前数据库的名字
 /** The name of the cache, readonly. */
 @property (copy, readonly) NSString *name;
 
+// memoryCache内存缓存  diskCache文件缓存
 /** The underlying memory cache. see `YYMemoryCache` for more information.*/
 @property (strong, readonly) YYMemoryCache *memoryCache;
 
 /** The underlying disk cache. see `YYDiskCache` for more information.*/
 @property (strong, readonly) YYDiskCache *diskCache;
+// @}
 
+#pragma mark - 四种实力化YYCache对象方法
+// @{ 通过以下四种方法来实例化YYCache对象
 /**
  Create a new instance with the specified name.
  Multiple instances with the same name will make the cache unstable.
@@ -91,7 +98,9 @@ NS_ASSUME_NONNULL_BEGIN
  @result A new cache object, or nil if an error occurs.
  */
 + (nullable instancetype)cacheWithPath:(NSString *)path;
+// @}
 
+#pragma mark - 禁止通过下面两种方法实例化对象
 - (instancetype)init UNAVAILABLE_ATTRIBUTE;
 + (instancetype)new UNAVAILABLE_ATTRIBUTE;
 
@@ -100,6 +109,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// @name Access Methods
 ///=============================================================================
 
+#pragma mark - 判断是否缓存了某个数据
+// @{ 通过key判断是否缓存了某个数据 第二个方法是异步执行 异步回调
 /**
  Returns a boolean value that indicates whether a given key is in cache.
  This method may blocks the calling thread until file read finished.
@@ -118,7 +129,10 @@ NS_ASSUME_NONNULL_BEGIN
  @param block A block which will be invoked in background queue when finished.
  */
 - (void)containsObjectForKey:(NSString *)key withBlock:(nullable void(^)(NSString *key, BOOL contains))block;
+// @}
 
+#pragma mark - 读取缓存
+// @{ 读操作 通过key获取缓存 第二个方法时异步执行 异步回调
 /**
  Returns the value associated with a given key.
  This method may blocks the calling thread until file read finished.
@@ -137,7 +151,10 @@ NS_ASSUME_NONNULL_BEGIN
  @param block A block which will be invoked in background queue when finished.
  */
 - (void)objectForKey:(NSString *)key withBlock:(nullable void(^)(NSString *key, id<NSCoding> object))block;
+// @}
 
+#pragma mark - 增 改 缓存
+// @{ 增 改--通过key缓存数据(可缓存遵从NSCoding协议的对象) 第二个方法是异步执行 异步回调
 /**
  Sets the value of the specified key in the cache.
  This method may blocks the calling thread until file write finished.
@@ -156,7 +173,10 @@ NS_ASSUME_NONNULL_BEGIN
  @param block  A block which will be invoked in background queue when finished.
  */
 - (void)setObject:(nullable id<NSCoding>)object forKey:(NSString *)key withBlock:(nullable void(^)(void))block;
+// @}
 
+#pragma mark - 删除缓存
+// @{
 /**
  Removes the value of the specified key in the cache.
  This method may blocks the calling thread until file delete finished.
@@ -200,7 +220,7 @@ NS_ASSUME_NONNULL_BEGIN
  */
 - (void)removeAllObjectsWithProgressBlock:(nullable void(^)(int removedCount, int totalCount))progress
                                  endBlock:(nullable void(^)(BOOL error))end;
-
+// @}
 @end
 
 NS_ASSUME_NONNULL_END

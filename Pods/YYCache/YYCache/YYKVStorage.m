@@ -90,7 +90,8 @@ static UIApplication *_YYSharedApplication() {
 }
 
 
-#pragma mark - db
+#pragma mark - db 数据库操作
+// @{
 
 - (BOOL)_dbOpen {
     if (_db) return YES;
@@ -186,17 +187,25 @@ static UIApplication *_YYSharedApplication() {
     return result == SQLITE_OK;
 }
 
+//将sql编译成stmt
 - (sqlite3_stmt *)_dbPrepareStmt:(NSString *)sql {
     if (![self _dbCheck] || sql.length == 0 || !_dbStmtCache) return NULL;
+    //从_dbStmtCache字典里面获取之前编译过的stmt
     sqlite3_stmt *stmt = (sqlite3_stmt *)CFDictionaryGetValue(_dbStmtCache, (__bridge const void *)(sql));
     if (!stmt) {
+        //将sql编译成stmt
         int result = sqlite3_prepare_v2(_db, sql.UTF8String, -1, &stmt, NULL);
         if (result != SQLITE_OK) {
+            //** 未能完成执行数据库 **
+            
+            //打印出错信息
             if (_errorLogsEnabled) NSLog(@"%s line:%d sqlite stmt prepare error (%d): %s", __FUNCTION__, __LINE__, result, sqlite3_errmsg(_db));
             return NULL;
         }
+        //将新的stmt缓存到字典
         CFDictionarySetValue(_dbStmtCache, (__bridge const void *)(sql), stmt);
     } else {
+        //重置stmt状态
         sqlite3_reset(stmt);
     }
     return stmt;
@@ -221,31 +230,42 @@ static UIApplication *_YYSharedApplication() {
 }
 
 - (BOOL)_dbSaveWithKey:(NSString *)key value:(NSData *)value fileName:(NSString *)fileName extendedData:(NSData *)extendedData {
+    //执行sql语句
     NSString *sql = @"insert or replace into manifest (key, filename, size, inline_data, modification_time, last_access_time, extended_data) values (?1, ?2, ?3, ?4, ?5, ?6, ?7);";
+    //所有sql语句执行之前 必须能run
     sqlite3_stmt *stmt = [self _dbPrepareStmt:sql];
     if (!stmt) return NO;
     
+    //时间
     int timestamp = (int)time(NULL);
+    //绑定参数
     sqlite3_bind_text(stmt, 1, key.UTF8String, -1, NULL);
     sqlite3_bind_text(stmt, 2, fileName.UTF8String, -1, NULL);
     sqlite3_bind_int(stmt, 3, (int)value.length);
     if (fileName.length == 0) {
+        //如果filename为nil缓存value
         sqlite3_bind_blob(stmt, 4, value.bytes, (int)value.length, 0);
     } else {
+        //如果filename
         sqlite3_bind_blob(stmt, 4, NULL, 0, 0);
     }
     sqlite3_bind_int(stmt, 5, timestamp);
     sqlite3_bind_int(stmt, 6, timestamp);
     sqlite3_bind_blob(stmt, 7, extendedData.bytes, (int)extendedData.length, 0);
     
+    //执行操作
     int result = sqlite3_step(stmt);
     if (result != SQLITE_DONE) {
+        //**未完成执行数据库**
+        
+        //输出错误
         if (_errorLogsEnabled) NSLog(@"%s line:%d sqlite insert error (%d): %s", __FUNCTION__, __LINE__, result, sqlite3_errmsg(_db));
         return NO;
     }
     return YES;
 }
 
+#pragma mark - 更新操作时间
 - (BOOL)_dbUpdateAccessTimeWithKey:(NSString *)key {
     NSString *sql = @"update manifest set last_access_time = ?1 where key = ?2;";
     sqlite3_stmt *stmt = [self _dbPrepareStmt:sql];
@@ -344,6 +364,7 @@ static UIApplication *_YYSharedApplication() {
 
 - (YYKVStorageItem *)_dbGetItemFromStmt:(sqlite3_stmt *)stmt excludeInlineData:(BOOL)excludeInlineData {
     int i = 0;
+    //取出数据
     char *key = (char *)sqlite3_column_text(stmt, i++);
     char *filename = (char *)sqlite3_column_text(stmt, i++);
     int size = sqlite3_column_int(stmt, i++);
@@ -354,6 +375,7 @@ static UIApplication *_YYSharedApplication() {
     const void *extended_data = sqlite3_column_blob(stmt, i);
     int extended_data_bytes = sqlite3_column_bytes(stmt, i++);
     
+    //赋值模型
     YYKVStorageItem *item = [YYKVStorageItem new];
     if (key) item.key = [NSString stringWithUTF8String:key];
     if (filename && *filename != 0) item.filename = [NSString stringWithUTF8String:filename];
@@ -366,17 +388,25 @@ static UIApplication *_YYSharedApplication() {
 }
 
 - (YYKVStorageItem *)_dbGetItemWithKey:(NSString *)key excludeInlineData:(BOOL)excludeInlineData {
+    //准备执行sel越剧
     NSString *sql = excludeInlineData ? @"select key, filename, size, modification_time, last_access_time, extended_data from manifest where key = ?1;" : @"select key, filename, size, inline_data, modification_time, last_access_time, extended_data from manifest where key = ?1;";
     sqlite3_stmt *stmt = [self _dbPrepareStmt:sql];
     if (!stmt) return nil;
+    //绑定参数
     sqlite3_bind_text(stmt, 1, key.UTF8String, -1, NULL);
     
     YYKVStorageItem *item = nil;
+    //执行操作
     int result = sqlite3_step(stmt);
     if (result == SQLITE_ROW) {
+        //**存在可读的row**
+        
+        //获取YYKVStorageItem
         item = [self _dbGetItemFromStmt:stmt excludeInlineData:excludeInlineData];
     } else {
         if (result != SQLITE_DONE) {
+            //未能完成执行数据库操作
+            //打印出错信息
             if (_errorLogsEnabled) NSLog(@"%s line:%d sqlite query error (%d): %s", __FUNCTION__, __LINE__, result, sqlite3_errmsg(_db));
         }
     }
@@ -438,19 +468,30 @@ static UIApplication *_YYSharedApplication() {
     }
 }
 
+//从数据库中查找文件名
 - (NSString *)_dbGetFilenameWithKey:(NSString *)key {
+    //准备执行sql
     NSString *sql = @"select filename from manifest where key = ?1;";
     sqlite3_stmt *stmt = [self _dbPrepareStmt:sql];
     if (!stmt) return nil;
+    //绑定参数
     sqlite3_bind_text(stmt, 1, key.UTF8String, -1, NULL);
+    //执行操作
     int result = sqlite3_step(stmt);
     if (result == SQLITE_ROW) {
+        //** 存在可读的row **
+        
+        //去除stmt中的数据
         char *filename = (char *)sqlite3_column_text(stmt, 0);
         if (filename && *filename != 0) {
+            //转UTF8String
             return [NSString stringWithUTF8String:filename];
         }
     } else {
         if (result != SQLITE_DONE) {
+            //** 未能完成执行数据库 **
+            
+            //输出出错信息
             if (_errorLogsEnabled) NSLog(@"%s line:%d sqlite query error (%d): %s", __FUNCTION__, __LINE__, result, sqlite3_errmsg(_db));
         }
     }
@@ -609,9 +650,10 @@ static UIApplication *_YYSharedApplication() {
     }
     return sqlite3_column_int(stmt, 0);
 }
+// @}
 
-
-#pragma mark - file
+#pragma mark - file 文件操作
+// @{
 
 - (BOOL)_fileWriteWithName:(NSString *)filename data:(NSData *)data {
     NSString *path = [_dataPath stringByAppendingPathComponent:filename];
@@ -654,9 +696,9 @@ static UIApplication *_YYSharedApplication() {
         }
     });
 }
+// @}
 
-
-#pragma mark - private
+#pragma mark - private  清空缓存
 
 /**
  Delete all files and empty in background.
@@ -670,7 +712,7 @@ static UIApplication *_YYSharedApplication() {
     [self _fileEmptyTrashInBackground];
 }
 
-#pragma mark - public
+#pragma mark - public 提供外界缓存操作
 
 - (instancetype)init {
     @throw [NSException exceptionWithName:@"YYKVStorage init error" reason:@"Please use the designated initializer and pass the 'path' and 'type'." userInfo:nil];
@@ -745,41 +787,62 @@ static UIApplication *_YYSharedApplication() {
 - (BOOL)saveItemWithKey:(NSString *)key value:(NSData *)value filename:(NSString *)filename extendedData:(NSData *)extendedData {
     if (key.length == 0 || value.length == 0) return NO;
     if (_type == YYKVStorageTypeFile && filename.length == 0) {
+        // ** 缓存方式为文件缓存 并且“未提供缓存文件名” 不进行缓存**
         return NO;
     }
     
     if (filename.length) {
+        // ** 存在文件名则用文件缓存 并且把key filename extendedData存入数据库**
+        
+        //缓存数据写入文件
         if (![self _fileWriteWithName:filename data:value]) {
             return NO;
         }
+        //把key filename extendedData写入数据库 存在filename 则不把value写入数据库
         if (![self _dbSaveWithKey:key value:value fileName:filename extendedData:extendedData]) {
+            //如果写入数据库失败 删除文件缓存的数据
             [self _fileDeleteWithName:filename];
             return NO;
         }
         return YES;
     } else {
         if (_type != YYKVStorageTypeSQLite) {
+            //** 缓存方式 不是数据库 **
+            
+            //根据key查找缓存文件名
             NSString *filename = [self _dbGetFilenameWithKey:key];
             if (filename) {
+                //删除文件缓存
                 [self _fileDeleteWithName:filename];
             }
         }
+        //把缓存写入数据库
         return [self _dbSaveWithKey:key value:value fileName:nil extendedData:extendedData];
     }
 }
 
+//删除缓存
 - (BOOL)removeItemForKey:(NSString *)key {
     if (key.length == 0) return NO;
+    //判断缓存方式
     switch (_type) {
         case YYKVStorageTypeSQLite: {
+            // ** 数据库缓存 **
+            
+            //删除数据库缓存数据
             return [self _dbDeleteItemWithKey:key];
         } break;
         case YYKVStorageTypeFile:
         case YYKVStorageTypeMixed: {
+            //** 数据库 或者 文件缓存 **
+            
+            //查找缓存文件名
             NSString *filename = [self _dbGetFilenameWithKey:key];
             if (filename) {
+                //删除文件缓存
                 [self _fileDeleteWithName:filename];
             }
+            //删除数据库缓存
             return [self _dbDeleteItemWithKey:key];
         } break;
         default: return NO;
@@ -956,14 +1019,23 @@ static UIApplication *_YYSharedApplication() {
     }
 }
 
+//查找缓存
 - (YYKVStorageItem *)getItemForKey:(NSString *)key {
     if (key.length == 0) return nil;
     YYKVStorageItem *item = [self _dbGetItemWithKey:key excludeInlineData:NO];
     if (item) {
+        //** 存在数据库缓存记录 **
+        
+        //更新操作时间
         [self _dbUpdateAccessTimeWithKey:key];
         if (item.filename) {
+            //**存在文件名**
+            //获取文件
             item.value = [self _fileReadWithName:item.filename];
             if (!item.value) {
+                //**未找到文件**
+                
+                //删除数据库记录
                 [self _dbDeleteItemWithKey:key];
                 item = nil;
             }
@@ -981,34 +1053,60 @@ static UIApplication *_YYSharedApplication() {
 - (NSData *)getItemValueForKey:(NSString *)key {
     if (key.length == 0) return nil;
     NSData *value = nil;
+    //判断缓存方式
     switch (_type) {
         case YYKVStorageTypeFile: {
+            //**文件缓存**
+            
+            //获取缓存文件名
             NSString *filename = [self _dbGetFilenameWithKey:key];
             if (filename) {
+                //** 文件存在**
+                
+                //获取缓存数据
                 value = [self _fileReadWithName:filename];
                 if (!value) {
+                    //**如果缓存数据不存在**
+                    
+                    //删除数据库缓存
                     [self _dbDeleteItemWithKey:key];
                     value = nil;
                 }
             }
         } break;
         case YYKVStorageTypeSQLite: {
+            //**数据库缓存方式**
+            
+            //从数据库中获取缓存
             value = [self _dbGetValueWithKey:key];
         } break;
         case YYKVStorageTypeMixed: {
+            //** 文件 或者 数据库缓存 **
+            
+            //获取缓存文件名
             NSString *filename = [self _dbGetFilenameWithKey:key];
             if (filename) {
+                //**如果缓存文件名存在**
+                
+                //从文件中获取缓存
                 value = [self _fileReadWithName:filename];
                 if (!value) {
+                    //**不存在缓存数据**
+                    
+                    //从数据库中删除缓存
                     [self _dbDeleteItemWithKey:key];
                     value = nil;
                 }
             } else {
+                //**查找不到文件名**
+                
+                //从数据库中获取缓存
                 value = [self _dbGetValueWithKey:key];
             }
         } break;
     }
     if (value) {
+        //更新操作时间
         [self _dbUpdateAccessTimeWithKey:key];
     }
     return value;
