@@ -53,7 +53,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (strong, readonly) YYDiskCache *diskCache;
 // @}
 
-#pragma mark - 四种实力化YYCache对象方法
+#pragma mark - 四种实例化YYCache对象方法
 // @{ 通过以下四种方法来实例化YYCache对象
 /**
  Create a new instance with the specified name.

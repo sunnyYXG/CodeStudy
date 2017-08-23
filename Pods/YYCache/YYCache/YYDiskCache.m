@@ -50,23 +50,30 @@ static NSString *_YYNSStringMD5(NSString *string) {
 static NSMapTable *_globalInstances;
 static dispatch_semaphore_t _globalInstancesLock;
 
+//初始化字典 用来缓存YYDiskCache对象  创建锁
 static void _YYDiskCacheInitGlobal() {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        //创建信号量
         _globalInstancesLock = dispatch_semaphore_create(1);
+        //创建字典
         _globalInstances = [[NSMapTable alloc] initWithKeyOptions:NSPointerFunctionsStrongMemory valueOptions:NSPointerFunctionsWeakMemory capacity:0];
     });
 }
 
+//获取已经缓存的YYDiskCache对象
 static YYDiskCache *_YYDiskCacheGetGlobal(NSString *path) {
     if (path.length == 0) return nil;
     _YYDiskCacheInitGlobal();
+    //等待信号量
     dispatch_semaphore_wait(_globalInstancesLock, DISPATCH_TIME_FOREVER);
     id cache = [_globalInstances objectForKey:path];
+    //释放信号量
     dispatch_semaphore_signal(_globalInstancesLock);
     return cache;
 }
 
+//保存新的YYDiskCache
 static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     if (cache.path.length == 0) return;
     _YYDiskCacheInitGlobal();
@@ -176,9 +183,11 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     self = [super init];
     if (!self) return nil;
     
+    //根据path先从缓存中找YYDiskCache 如果没有找到再去重新创建实例
     YYDiskCache *globalCache = _YYDiskCacheGetGlobal(path);
     if (globalCache) return globalCache;
     
+    //缓存方式
     YYKVStorageType type;
     if (threshold == 0) {
         type = YYKVStorageTypeFile;
@@ -188,9 +197,11 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
         type = YYKVStorageTypeMixed;
     }
     
+    //实例化YYKVStorage对象 YYDiskCache的缓存实现都在YKVStorage
     YYKVStorage *kv = [[YYKVStorage alloc] initWithPath:path type:type];
     if (!kv) return nil;
     
+    //初始化数据
     _kv = kv;
     _path = path;
     _lock = dispatch_semaphore_create(1);
@@ -203,6 +214,7 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     _autoTrimInterval = 60;
     
     [self _trimRecursively];
+    //缓存self
     _YYDiskCacheSetGlobal(self);
     
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(_appWillBeTerminated) name:UIApplicationWillTerminateNotification object:nil];
@@ -261,19 +273,26 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     });
 }
 
+//添加缓存
 - (void)setObject:(id<NSCoding>)object forKey:(NSString *)key {
     if (!key) return;
     if (!object) {
+        //** 如果缓存对象为nil **
+        
+        //删除缓存
         [self removeObjectForKey:key];
         return;
     }
     
     NSData *extendedData = [YYDiskCache getExtendedDataFromObject:object];
     NSData *value = nil;
+    
+    //可以customArchiveBlock外部归档数据
     if (_customArchiveBlock) {
         value = _customArchiveBlock(object);
     } else {
         @try {
+            //归档数据
             value = [NSKeyedArchiver archivedDataWithRootObject:object];
         }
         @catch (NSException *exception) {
@@ -283,13 +302,20 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     if (!value) return;
     NSString *filename = nil;
     if (_kv.type != YYKVStorageTypeSQLite) {
+        //缓存类型非YYKVStorageTypeSQLite
         if (value.length > _inlineThreshold) {
+            //** 缓存对象大于_inlineThreshold 则用文件缓存**
+            
+            //生成文件名
             filename = [self _filenameForKey:key];
         }
     }
     
+    //加锁
     Lock();
+    //缓存数据
     [_kv saveItemWithKey:key value:value filename:filename extendedData:extendedData];
+    //解锁
     Unlock();
 }
 
