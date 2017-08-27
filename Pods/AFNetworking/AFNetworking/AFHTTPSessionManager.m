@@ -63,6 +63,9 @@
     return [self initWithBaseURL:nil sessionConfiguration:configuration];
 }
 
+/*
+ 全能初始化方法：在其中通过configuration生成AFHTTPSessionManager的实例对象，并且初始化baseUrl、requestSerializer、responseSerializer属性，需要注意的是AFHTTPSessionManager的对象是调用父类AFURLSessionManager的initWithSessionConfiguration:方法生成的，所以要研究一下父类AFURLSessionManager
+ */
 - (instancetype)initWithBaseURL:(NSURL *)url
            sessionConfiguration:(NSURLSessionConfiguration *)configuration
 {
@@ -77,7 +80,9 @@
     }
 
     self.baseURL = url;
-
+    /*
+     请求序列化器和响应序列化器进行初始化
+     */
     self.requestSerializer = [AFHTTPRequestSerializer serializer];
     self.responseSerializer = [AFJSONResponseSerializer serializer];
 
@@ -85,7 +90,7 @@
 }
 
 #pragma mark -
-
+//requestSerializer和responseSerializer的实现不一样
 - (void)setRequestSerializer:(AFHTTPRequestSerializer <AFURLRequestSerialization> *)requestSerializer {
     NSParameterAssert(requestSerializer);
 
@@ -109,6 +114,7 @@
     return [self GET:URLString parameters:parameters progress:nil success:success failure:failure];
 }
 
+//GET请求的便利方法
 - (NSURLSessionDataTask *)GET:(NSString *)URLString
                    parameters:(id)parameters
                      progress:(void (^)(NSProgress * _Nonnull))downloadProgress
@@ -116,6 +122,7 @@
                       failure:(void (^)(NSURLSessionDataTask * _Nullable, NSError * _Nonnull))failure
 {
 
+    //生成dataTask实例
     NSURLSessionDataTask *dataTask = [self dataTaskWithHTTPMethod:@"GET"
                                                         URLString:URLString
                                                        parameters:parameters
@@ -124,6 +131,13 @@
                                                           success:success
                                                           failure:failure];
 
+    /** session task的几种状态的操作函数
+        suspend -- 可以让当前的任务暂停
+        resume --- 该方法不仅可以启动任务 还可以唤醒suspend状态的任务
+        cancle --- 该方法取消当前的任务 也可以向处于suspend状态的任务发送cancle消息，
+        任务如果被取消便不能回复到之前的状态
+     */
+    //开启dataTask
     [dataTask resume];
 
     return dataTask;
@@ -251,6 +265,15 @@
     return dataTask;
 }
 
+/*
+ 该方法才是AFHTTPSessionManager类的核心方法。
+ 上面分别针对HTTP请求方法提供的GET/POST/HEAD/DELETE方法，只不过是以可辨别的方法名取代了method参数。
+ 在它们的内部其实都是指定和方法名相对应的method参数来调用该方法
+ 
+ 我们知道dataTask是由NSURLSession的dataTaskWithRequest:方法来生成的，那首先第一步我们需要生成request，然后以此生成dataTask。
+ 该方法内部正是分为如此两步骤：1.先生成请求request;2.再以request生成dataTask。
+ 
+*/
 - (NSURLSessionDataTask *)dataTaskWithHTTPMethod:(NSString *)method
                                        URLString:(NSString *)URLString
                                       parameters:(id)parameters
@@ -262,6 +285,7 @@
     NSError *serializationError = nil;
     //通过requestSerializer属性拼接request对象
     NSMutableURLRequest *request = [self.requestSerializer requestWithMethod:method URLString:[[NSURL URLWithString:URLString relativeToURL:self.baseURL] absoluteString] parameters:parameters error:&serializationError];
+    //处理request产生的错误
     if (serializationError) {
         if (failure) {
 #pragma clang diagnostic push
@@ -275,6 +299,7 @@
         return nil;
     }
 
+    // 将上面生成的request作为参数传入dataTaskWithRequest方法，生成dataTask实例对象
     __block NSURLSessionDataTask *dataTask = nil;
     dataTask = [self dataTaskWithRequest:request
                           uploadProgress:uploadProgress
