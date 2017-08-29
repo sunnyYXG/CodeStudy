@@ -10,16 +10,33 @@
 #import <objc/message.h>
 #import "NSImage+WebCache.h"
 
+/**
+ 通过这个对象关联一个`SDWebImageDownloaderOperation`对象
+ */
 @interface SDWebImageCombinedOperation : NSObject <SDWebImageOperation>
 
+/**
+ 用于判断Operation是否已经取消
+ */
 @property (assign, nonatomic, getter = isCancelled) BOOL cancelled;
+
+/**
+ 取消回调
+ */
 @property (copy, nonatomic, nullable) SDWebImageNoParamsBlock cancelBlock;
+
+/**
+ SDWebImageDownloaderOperation对象。可以通过这个属性取消一个NSOperation
+ */
 @property (strong, nonatomic, nullable) NSOperation *cacheOperation;
 
 @end
 
 @interface SDWebImageManager ()
 
+/*
+ 覆盖接口文件中的readonly属性
+ */
 @property (strong, nonatomic, readwrite, nonnull) SDImageCache *imageCache;
 @property (strong, nonatomic, readwrite, nonnull) SDWebImageDownloader *imageDownloader;
 @property (strong, nonatomic, nonnull) NSMutableSet<NSURL *> *failedURLs;
@@ -44,16 +61,33 @@
     return [self initWithCache:cache downloader:downloader];
 }
 
+/**
+ 初始化SDImageCache和SDWebImageDownloader对象
+ 
+ @param cache SDImageCache对象
+ @param downloader SDWebImageDownloader对象
+ @return 返回初始化结果
+ */
 - (nonnull instancetype)initWithCache:(nonnull SDImageCache *)cache downloader:(nonnull SDWebImageDownloader *)downloader {
     if ((self = [super init])) {
         _imageCache = cache;
         _imageDownloader = downloader;
+        //用于保存加载失败的url集合
         _failedURLs = [NSMutableSet new];
+        //用于保存当前正在加载的Operation
         _runningOperations = [NSMutableArray new];
     }
     return self;
 }
 
+/**
+ 根据url获取url对应的缓存key。
+ 如果有实现指定的url转换key的Block，则用这个方式转换为key。
+ 否则直接用url的绝对值多为key
+ 
+ @param url url
+ @return 缓存的key
+ */
 - (nullable NSString *)cacheKeyForURL:(nullable NSURL *)url {
     if (!url) {
         return @"";
@@ -66,12 +100,19 @@
     }
 }
 
+/**
+ 一个url的缓存是否存在
+ 
+ @param url 缓存数据对应的url
+ @param completionBlock 缓存结果回调
+ */
 - (void)cachedImageExistsForURL:(nullable NSURL *)url
                      completion:(nullable SDWebImageCheckCacheCompletionBlock)completionBlock {
     NSString *key = [self cacheKeyForURL:url];
-    
+    //内存中是否有key的缓存
     BOOL isInMemoryCache = ([self.imageCache imageFromMemoryCacheForKey:key] != nil);
     
+    //存在
     if (isInMemoryCache) {
         // making sure we call the completion block on the main queue
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -82,6 +123,7 @@
         return;
     }
     
+    //磁盘缓存
     [self.imageCache diskImageExistsWithKey:key completion:^(BOOL isInDiskCache) {
         // the completion block of checkDiskCacheForImageWithKey:completion: is always called on the main queue, no need to further dispatch
         if (completionBlock) {
@@ -90,6 +132,12 @@
     }];
 }
 
+/**
+ url是否有磁盘缓存数据
+ 
+ @param url url
+ @param completionBlock 回调
+ */
 - (void)diskImageExistsForURL:(nullable NSURL *)url
                    completion:(nullable SDWebImageCheckCacheCompletionBlock)completionBlock {
     NSString *key = [self cacheKeyForURL:url];
@@ -102,6 +150,15 @@
     }];
 }
 
+/**
+ 这个方法是核心方法。UIImageView等这种分类都默认通过调用这个方法来获取数据。
+ 
+ @param url 图片的url地址
+ @param options 获取图片的属性
+ @param progressBlock 加载进度回调
+ @param completedBlock 加载完成回调
+ @return 返回一个加载的载体对象。以便提供给后面取消删除等。
+ */
 - (id <SDWebImageOperation>)loadImageWithURL:(nullable NSURL *)url
                                      options:(SDWebImageOptions)options
                                     progress:(nullable SDWebImageDownloaderProgressBlock)progressBlock
@@ -111,41 +168,57 @@
 
     // Very common mistake is to send the URL using NSString object instead of NSURL. For some strange reason, Xcode won't
     // throw any warning for this type mismatch. Here we failsafe this error by allowing URLs to be passed as NSString.
+    //如果传入的url是NSString格式的。则转换为NSURL类型再处理
     if ([url isKindOfClass:NSString.class]) {
         url = [NSURL URLWithString:(NSString *)url];
     }
 
     // Prevents app crashing on argument type error like sending NSNull instead of NSURL
+    //如果url不是NSURL类型的对象。则置为nil
     if (![url isKindOfClass:NSURL.class]) {
         url = nil;
     }
 
+    //图片加载获取获取过程中绑定一个`SDWebImageCombinedOperation`对象。以方便后续再通过这个对象对url的加载控制。
     __block SDWebImageCombinedOperation *operation = [SDWebImageCombinedOperation new];
     __weak SDWebImageCombinedOperation *weakOperation = operation;
 
     BOOL isFailedUrl = NO;
+    //当前url是否在失败url的集合里面
     if (url) {
         @synchronized (self.failedURLs) {
             isFailedUrl = [self.failedURLs containsObject:url];
         }
     }
 
+    //如果url是失败的url或者url有问题等各种问题。则直接根据opeation来做异常情况的处理
     if (url.absoluteString.length == 0 || (!(options & SDWebImageRetryFailed) && isFailedUrl)) {
+        //构建回调Block
         [self callCompletionBlockForOperation:operation completion:completedBlock error:[NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorFileDoesNotExist userInfo:nil] url:url];
         return operation;
     }
 
+    //把加载图片的一个载体存入runningOperations。里面是所有正在做图片加载过程的operation的集合。
     @synchronized (self.runningOperations) {
         [self.runningOperations addObject:operation];
     }
+    //根据url获取url对应的key
     NSString *key = [self cacheKeyForURL:url];
 
+    /*
+     *如果图片是从内存加载，则返回的cacheOperation是nil，
+     *如果是从磁盘加载，则返回的cacheOperation是`NSOperation`对象。
+     *如果是从网络加载，则返回的cacheOperation对象是`SDWebImageDownloaderOperation`对象。
+     */
     operation.cacheOperation = [self.imageCache queryCacheOperationForKey:key done:^(UIImage *cachedImage, NSData *cachedData, SDImageCacheType cacheType) {
         if (operation.isCancelled) {
+            //从缓存中获取图片数据返回
+            //如果已经取消了操作。则直接返回并且移除对应的opetation对象
             [self safelyRemoveOperationFromRunning:operation];
             return;
         }
 
+        //如果从缓存获取图片失败。或者设置了SDWebImageRefreshCached来忽略缓存。则先把缓存的图片返回。
         if ((!cachedImage || options & SDWebImageRefreshCached) && (![self.delegate respondsToSelector:@selector(imageManager:shouldDownloadImageForURL:)] || [self.delegate imageManager:self shouldDownloadImageForURL:url])) {
             if (cachedImage && options & SDWebImageRefreshCached) {
                 // If image was found in the cache but SDWebImageRefreshCached is provided, notify about the cached image
@@ -154,6 +227,7 @@
             }
 
             // download if no image or requested to refresh anyway, and download allowed by delegate
+           //把图片加载的`SDWebImageOptions`类型枚举转换为图片下载的`SDWebImageDownloaderOptions`类型的枚举
             SDWebImageDownloaderOptions downloaderOptions = 0;
             if (options & SDWebImageLowPriority) downloaderOptions |= SDWebImageDownloaderLowPriority;
             if (options & SDWebImageProgressiveDownload) downloaderOptions |= SDWebImageDownloaderProgressiveDownload;
@@ -164,6 +238,9 @@
             if (options & SDWebImageHighPriority) downloaderOptions |= SDWebImageDownloaderHighPriority;
             if (options & SDWebImageScaleDownLargeImages) downloaderOptions |= SDWebImageDownloaderScaleDownLargeImages;
             
+            /*
+             如果设置了强制刷新缓存的选项。则`SDWebImageDownloaderProgressiveDownload`选项失效并且添加`SDWebImageDownloaderIgnoreCachedResponse`选项。
+             */
             if (cachedImage && options & SDWebImageRefreshCached) {
                 // force progressive off if image already cached but forced refreshing
                 downloaderOptions &= ~SDWebImageDownloaderProgressiveDownload;
@@ -171,13 +248,17 @@
                 downloaderOptions |= SDWebImageDownloaderIgnoreCachedResponse;
             }
             
+            //新建一个网络下载的操作。
             SDWebImageDownloadToken *subOperationToken = [self.imageDownloader downloadImageWithURL:url options:downloaderOptions progress:progressBlock completed:^(UIImage *downloadedImage, NSData *downloadedData, NSError *error, BOOL finished) {
                 __strong __typeof(weakOperation) strongOperation = weakOperation;
+                
+                //如果图片下载结束以后，对应的图片加载操作已经取消。则什么处理都不做
                 if (!strongOperation || strongOperation.isCancelled) {
                     // Do nothing if the operation was cancelled
                     // See #699 for more details
                     // if we would call the completedBlock, there could be a race condition between this block and another completedBlock for the same object, so if this one is called second, we will overwrite the new data
                 } else if (error) {
+                    //如果加载出错。则直接返回回调。并且添加到failedURLs中
                     [self callCompletionBlockForOperation:strongOperation completion:completedBlock error:error url:url];
 
                     if (   error.code != NSURLErrorNotConnectedToInternet
@@ -194,7 +275,9 @@
                     }
                 }
                 else {
+                    //网络图片加载成功
                     if ((options & SDWebImageRetryFailed)) {
+                        //如果有重试失败下载的选项。则把url从failedURLS中移除
                         @synchronized (self.failedURLs) {
                             [self.failedURLs removeObject:url];
                         }
@@ -204,41 +287,52 @@
 
                     if (options & SDWebImageRefreshCached && cachedImage && !downloadedImage) {
                         // Image refresh hit the NSURLCache cache, do not call the completion block
+                        //如果成功下载图片。并且图片是动态图片。并且设置了SDWebImageTransformAnimatedImage属性。则处理图片
                     } else if (downloadedImage && (!downloadedImage.images || (options & SDWebImageTransformAnimatedImage)) && [self.delegate respondsToSelector:@selector(imageManager:transformDownloadedImage:withURL:)]) {
                         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+                            //获取transform以后的图片
                             UIImage *transformedImage = [self.delegate imageManager:self transformDownloadedImage:downloadedImage withURL:url];
 
+                            //存储transform以后的的图片
                             if (transformedImage && finished) {
                                 BOOL imageWasTransformed = ![transformedImage isEqual:downloadedImage];
                                 // pass nil if the image was transformed, so we can recalculate the data from the image
                                 [self.imageCache storeImage:transformedImage imageData:(imageWasTransformed ? nil : downloadedData) forKey:key toDisk:cacheOnDisk completion:nil];
                             }
                             
+                            //回调拼接
                             [self callCompletionBlockForOperation:strongOperation completion:completedBlock image:transformedImage data:downloadedData error:nil cacheType:SDImageCacheTypeNone finished:finished url:url];
                         });
                     } else {
+                        //如果成功下载图片。并且图片不是图片。则直接缓存和回调
                         if (downloadedImage && finished) {
                             [self.imageCache storeImage:downloadedImage imageData:downloadedData forKey:key toDisk:cacheOnDisk completion:nil];
                         }
+                        //回调拼接
                         [self callCompletionBlockForOperation:strongOperation completion:completedBlock image:downloadedImage data:downloadedData error:nil cacheType:SDImageCacheTypeNone finished:finished url:url];
                     }
                 }
 
+                //从正在加载的图片操作集合中移除当前操作
                 if (finished) {
                     [self safelyRemoveOperationFromRunning:strongOperation];
                 }
             }];
+            //重置cancelBlock，取消下载operation
             operation.cancelBlock = ^{
+                //取消置顶的token对应的下载
                 [self.imageDownloader cancel:subOperationToken];
                 __strong __typeof(weakOperation) strongOperation = weakOperation;
                 [self safelyRemoveOperationFromRunning:strongOperation];
             };
         } else if (cachedImage) {
+            //如果获取到了缓存图片。在直接通过缓存图片处理
             __strong __typeof(weakOperation) strongOperation = weakOperation;
             [self callCompletionBlockForOperation:strongOperation completion:completedBlock image:cachedImage data:cachedData error:nil cacheType:cacheType finished:YES url:url];
             [self safelyRemoveOperationFromRunning:operation];
         } else {
             // Image not in cache and download disallowed by delegate
+            //图片没有缓存、并且图片也没有下载
             __strong __typeof(weakOperation) strongOperation = weakOperation;
             [self callCompletionBlockForOperation:strongOperation completion:completedBlock image:nil data:nil error:nil cacheType:SDImageCacheTypeNone finished:YES url:url];
             [self safelyRemoveOperationFromRunning:operation];
@@ -306,6 +400,11 @@
 
 @implementation SDWebImageCombinedOperation
 
+/**
+ 取消Operation的回调Block
+ 
+ @param cancelBlock 回调Block
+ */
 - (void)setCancelBlock:(nullable SDWebImageNoParamsBlock)cancelBlock {
     // check if the operation is already cancelled, then we just call the cancelBlock
     if (self.isCancelled) {
@@ -318,9 +417,13 @@
     }
 }
 
+/**
+ 调用cancel方法。这个方法继承自`SDWebImageOperation`协议。方法里面会调用`SDWebImageDownlaoderOperation`或者`NSOperation`的cancel方法
+ */
 - (void)cancel {
     self.cancelled = YES;
     if (self.cacheOperation) {
+        //调用`SDWebImageDownlaoderOperation`或者`NSOperation`的cancel方法
         [self.cacheOperation cancel];
         self.cacheOperation = nil;
     }
